@@ -115,11 +115,23 @@ class MIDIController {
             speed: { type: 'cc', value: 16 },             // CC16 - Speed
             audioIntensity: { type: 'cc', value: 17 },    // CC17 - Audio intensity
 
+            // -------------- VIDEO EFFECTS PARAMETERS --------------
+            videoRotation: { type: 'cc', value: 18 },     // CC18 - Video rotation
+            videoKaleidoscope: { type: 'cc', value: 19 }, // CC19 - Kaleidoscope segments
+            videoChromaKey: { type: 'cc', value: 20 },    // CC20 - Chroma key threshold
+            videoEdge: { type: 'cc', value: 21 },         // CC21 - Edge detection intensity
+            videoColorShift: { type: 'cc', value: 22 },   // CC22 - Color channel shift
+
             // -------------- AUDIO MODULATION --------------
             audioToHue: { type: 'cc', value: 23 },        // CC23 - Audio modulates Hue
             audioToSaturation: { type: 'cc', value: 24 }, // CC24 - Audio modulates Saturation
             audioToBrightness: { type: 'cc', value: 25 }, // CC25 - Audio modulates Brightness
             audioToZoom: { type: 'cc', value: 26 },       // CC26 - Audio modulates Zoom
+
+            // -------------- VIDEO EFFECT SWITCHES --------------
+            videoInvert: { type: 'cc', value: 41 },       // CC41 - Invert video colors toggle
+            videoBlur: { type: 'cc', value: 45 },         // CC45 - Blur video toggle
+            videoPixelate: { type: 'cc', value: 60 },     // CC60 - Pixelate video toggle
 
             // -------------- SHADER NAVIGATION --------------
             shaderPrev: { type: 'cc', value: 43 },         // CC43 - Previous shader
@@ -342,6 +354,35 @@ class MIDIController {
             this.onParameterChange('audioToBrightness', value);
         } else if (cc === this.mappings.audioToZoom.value) {
             this.onParameterChange('audioToZoom', value);
+        } else if (cc === this.mappings.videoInvert.value) {
+            // Toggle video invert at 0.5 threshold
+            const invert = value > 0.5 ? 1.0 : 0.0;
+            this.onParameterChange('videoInvert', invert);
+            Logger.system(`Video Invert: ${invert > 0.5 ? 'ON' : 'OFF'}`);
+        } else if (cc === this.mappings.videoBlur.value) {
+            // Toggle video blur at 0.5 threshold
+            const blur = value > 0.5 ? 1.0 : 0.0;
+            this.onParameterChange('videoBlur', blur);
+            Logger.system(`Video Blur: ${blur > 0.5 ? 'ON' : 'OFF'}`);
+        } else if (cc === this.mappings.videoPixelate.value) {
+            // Toggle video pixelate at 0.5 threshold
+            const pixelate = value > 0.5 ? 1.0 : 0.0;
+            this.onParameterChange('videoPixelate', pixelate);
+            Logger.system(`Video Pixelate: ${pixelate > 0.5 ? 'ON' : 'OFF'}`);
+        } else if (cc === this.mappings.videoRotation.value) {
+            // Map 0-1 to 0-360 degrees
+            const rotation = value * 360.0;
+            this.onParameterChange('videoRotation', rotation);
+        } else if (cc === this.mappings.videoKaleidoscope.value) {
+            // Map 0-1 to 2-16 segments
+            const segments = Math.floor(2.0 + value * 14.0);
+            this.onParameterChange('videoKaleidoscope', segments);
+        } else if (cc === this.mappings.videoChromaKey.value) {
+            this.onParameterChange('videoChromaKey', value);
+        } else if (cc === this.mappings.videoEdge.value) {
+            this.onParameterChange('videoEdge', value);
+        } else if (cc === this.mappings.videoColorShift.value) {
+            this.onParameterChange('videoColorShift', value);
         }
     }
 
@@ -380,7 +421,15 @@ class ShaderRenderer {
             u_audioToHue: 0.0,
             u_audioToSaturation: 0.0,
             u_audioToBrightness: 0.0,
-            u_audioToZoom: 0.0
+            u_audioToZoom: 0.0,
+            u_videoInvert: 0.0,
+            u_videoBlur: 0.0,
+            u_videoPixelate: 0.0,
+            u_videoRotation: 0.0,
+            u_videoKaleidoscope: 0.0,
+            u_videoChromaKey: 0.0,
+            u_videoEdge: 0.0,
+            u_videoColorShift: 0.0
         };
 
         // Video and audio textures
@@ -393,6 +442,12 @@ class ShaderRenderer {
 
         // Time tracking for speed control
         this.baseTime = 0;
+
+        // Color sync tracking
+        this.videoColorSyncCanvas = null;
+        this.videoColorSyncCtx = null;
+        this.lastColorSyncLog = 0;
+        this.colorSyncLogInterval = 500; // Log every 500ms
 
         // Handle window resize
         window.addEventListener('resize', () => this.onResize());
@@ -422,6 +477,14 @@ class ShaderRenderer {
             uniform float u_audioToSaturation;
             uniform float u_audioToBrightness;
             uniform float u_audioToZoom;
+            uniform float u_videoInvert;
+            uniform float u_videoBlur;
+            uniform float u_videoPixelate;
+            uniform float u_videoRotation;
+            uniform float u_videoKaleidoscope;
+            uniform float u_videoChromaKey;
+            uniform float u_videoEdge;
+            uniform float u_videoColorShift;
 
             // Video and audio
             uniform sampler2D u_videoTexture;
@@ -536,7 +599,100 @@ class ShaderRenderer {
                 if (u_hasVideo && u_videoMix > 0.0) {
                     vec2 videoUV = gl_FragCoord.xy / iResolution.xy;
                     videoUV.y = 1.0 - videoUV.y; // Flip Y coordinate
+
+                    // Center UV for rotation and kaleidoscope
+                    vec2 centeredUV = videoUV - 0.5;
+
+                    // Apply rotation
+                    if (u_videoRotation > 0.0) {
+                        float angle = radians(u_videoRotation);
+                        float c = cos(angle);
+                        float s = sin(angle);
+                        mat2 rotMatrix = mat2(c, -s, s, c);
+                        centeredUV = rotMatrix * centeredUV;
+                    }
+
+                    // Apply kaleidoscope effect
+                    if (u_videoKaleidoscope > 1.0) {
+                        float segments = u_videoKaleidoscope;
+                        float angle = atan(centeredUV.y, centeredUV.x);
+                        float radius = length(centeredUV);
+                        float segmentAngle = 3.14159265 * 2.0 / segments;
+                        angle = mod(angle, segmentAngle);
+                        if (mod(floor(atan(centeredUV.y, centeredUV.x) / segmentAngle), 2.0) < 1.0) {
+                            angle = segmentAngle - angle;
+                        }
+                        centeredUV = vec2(cos(angle), sin(angle)) * radius;
+                    }
+
+                    // Convert back to UV space
+                    videoUV = centeredUV + 0.5;
+
+                    // Apply pixelate effect to UV coordinates
+                    if (u_videoPixelate > 0.5) {
+                        float pixelSize = 0.02; // Adjust for desired pixel size
+                        videoUV = floor(videoUV / pixelSize) * pixelSize;
+                    }
+
+                    // Sample video texture
                     vec3 videoColor = texture2D(u_videoTexture, videoUV).rgb;
+
+                    // Apply blur effect (simple box blur)
+                    if (u_videoBlur > 0.5) {
+                        float blurSize = 0.003;
+                        videoColor = vec3(0.0);
+                        for (float x = -2.0; x <= 2.0; x += 1.0) {
+                            for (float y = -2.0; y <= 2.0; y += 1.0) {
+                                vec2 offset = vec2(x, y) * blurSize;
+                                videoColor += texture2D(u_videoTexture, videoUV + offset).rgb;
+                            }
+                        }
+                        videoColor /= 25.0; // Average of 5x5 kernel
+                    }
+
+                    // Apply edge detection
+                    if (u_videoEdge > 0.0) {
+                        vec3 edge = vec3(0.0);
+                        float edgeSize = 0.002;
+                        vec3 s00 = texture2D(u_videoTexture, videoUV + vec2(-edgeSize, -edgeSize)).rgb;
+                        vec3 s10 = texture2D(u_videoTexture, videoUV + vec2(0.0, -edgeSize)).rgb;
+                        vec3 s20 = texture2D(u_videoTexture, videoUV + vec2(edgeSize, -edgeSize)).rgb;
+                        vec3 s01 = texture2D(u_videoTexture, videoUV + vec2(-edgeSize, 0.0)).rgb;
+                        vec3 s21 = texture2D(u_videoTexture, videoUV + vec2(edgeSize, 0.0)).rgb;
+                        vec3 s02 = texture2D(u_videoTexture, videoUV + vec2(-edgeSize, edgeSize)).rgb;
+                        vec3 s12 = texture2D(u_videoTexture, videoUV + vec2(0.0, edgeSize)).rgb;
+                        vec3 s22 = texture2D(u_videoTexture, videoUV + vec2(edgeSize, edgeSize)).rgb;
+
+                        vec3 sobelX = s00 + 2.0 * s10 + s20 - s02 - 2.0 * s12 - s22;
+                        vec3 sobelY = s00 + 2.0 * s01 + s02 - s20 - 2.0 * s21 - s22;
+                        edge = sqrt(sobelX * sobelX + sobelY * sobelY);
+
+                        videoColor = mix(videoColor, edge, u_videoEdge);
+                    }
+
+                    // Apply color channel shift
+                    if (u_videoColorShift > 0.0) {
+                        float shift = u_videoColorShift * 0.02;
+                        float r = texture2D(u_videoTexture, videoUV + vec2(shift, 0.0)).r;
+                        float g = texture2D(u_videoTexture, videoUV).g;
+                        float b = texture2D(u_videoTexture, videoUV - vec2(shift, 0.0)).b;
+                        videoColor = vec3(r, g, b);
+                    }
+
+                    // Apply invert effect
+                    if (u_videoInvert > 0.5) {
+                        videoColor = vec3(1.0) - videoColor;
+                    }
+
+                    // Apply chroma key (green screen removal)
+                    if (u_videoChromaKey > 0.0) {
+                        vec3 keyColor = vec3(0.0, 1.0, 0.0); // Green
+                        float dist = distance(videoColor, keyColor);
+                        float alpha = smoothstep(u_videoChromaKey * 0.5, u_videoChromaKey, dist);
+                        videoColor = mix(finalColor, videoColor, alpha);
+                    }
+
+                    // Log color sync values (via uniform updates in JS)
                     finalColor = mix(finalColor, videoColor, u_videoMix);
                 }
 
@@ -577,7 +733,15 @@ class ShaderRenderer {
                 u_hasVideo: { value: false },
                 u_audioBass: { value: 0.0 },
                 u_audioMid: { value: 0.0 },
-                u_audioTreble: { value: 0.0 }
+                u_audioTreble: { value: 0.0 },
+                u_videoInvert: { value: this.globalUniforms.u_videoInvert },
+                u_videoBlur: { value: this.globalUniforms.u_videoBlur },
+                u_videoPixelate: { value: this.globalUniforms.u_videoPixelate },
+                u_videoRotation: { value: this.globalUniforms.u_videoRotation },
+                u_videoKaleidoscope: { value: this.globalUniforms.u_videoKaleidoscope },
+                u_videoChromaKey: { value: this.globalUniforms.u_videoChromaKey },
+                u_videoEdge: { value: this.globalUniforms.u_videoEdge },
+                u_videoColorShift: { value: this.globalUniforms.u_videoColorShift }
             }
         });
     }
@@ -625,6 +789,65 @@ class ShaderRenderer {
         this.audioData = audioDataGetter;
     }
 
+    getVideoAverageColor() {
+        if (!this.videoTexture || !this.videoTexture.image || this.videoTexture.image.readyState !== 4) {
+            return { r: 0, g: 0, b: 0, h: 0, s: 0, l: 0 };
+        }
+
+        // Create canvas for color sampling if not exists
+        if (!this.videoColorSyncCanvas) {
+            this.videoColorSyncCanvas = document.createElement('canvas');
+            this.videoColorSyncCanvas.width = 16; // Small size for performance
+            this.videoColorSyncCanvas.height = 16;
+            this.videoColorSyncCtx = this.videoColorSyncCanvas.getContext('2d');
+        }
+
+        const ctx = this.videoColorSyncCtx;
+        const video = this.videoTexture.image;
+
+        // Draw scaled down video frame
+        ctx.drawImage(video, 0, 0, 16, 16);
+
+        // Get image data
+        const imageData = ctx.getImageData(0, 0, 16, 16);
+        const data = imageData.data;
+
+        // Calculate average color
+        let r = 0, g = 0, b = 0;
+        const pixelCount = 16 * 16;
+
+        for (let i = 0; i < data.length; i += 4) {
+            r += data[i];
+            g += data[i + 1];
+            b += data[i + 2];
+        }
+
+        r = r / pixelCount / 255.0;
+        g = g / pixelCount / 255.0;
+        b = b / pixelCount / 255.0;
+
+        // Convert to HSL
+        const max = Math.max(r, g, b);
+        const min = Math.min(r, g, b);
+        const l = (max + min) / 2;
+        let h = 0, s = 0;
+
+        if (max !== min) {
+            const d = max - min;
+            s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+
+            if (max === r) {
+                h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+            } else if (max === g) {
+                h = ((b - r) / d + 2) / 6;
+            } else {
+                h = ((r - g) / d + 4) / 6;
+            }
+        }
+
+        return { r, g, b, h: h * 360, s, l };
+    }
+
     render() {
         if (!this.material) return;
 
@@ -649,6 +872,23 @@ class ShaderRenderer {
         // Update video texture if available
         if (this.videoTexture && this.videoTexture.image && this.videoTexture.image.readyState === 4) {
             this.videoTexture.needsUpdate = true;
+
+            // Color sync: Sample video color and log periodically
+            const now = Date.now();
+            if (now - this.lastColorSyncLog > this.colorSyncLogInterval) {
+                const videoColor = this.getVideoAverageColor();
+                const shaderHue = this.globalUniforms.u_hue;
+                const shaderSat = this.globalUniforms.u_saturation;
+                const shaderBright = this.globalUniforms.u_brightness;
+
+                Logger.system(
+                    `[COLOR SYNC] Video: RGB(${(videoColor.r * 255).toFixed(0)}, ${(videoColor.g * 255).toFixed(0)}, ${(videoColor.b * 255).toFixed(0)}) ` +
+                    `HSL(${videoColor.h.toFixed(1)}°, ${(videoColor.s * 100).toFixed(1)}%, ${(videoColor.l * 100).toFixed(1)}%) | ` +
+                    `Shader: Hue=${shaderHue.toFixed(1)}° Sat=${shaderSat.toFixed(2)} Bright=${shaderBright.toFixed(2)}`
+                );
+
+                this.lastColorSyncLog = now;
+            }
         }
 
         this.renderer.render(this.scene, this.camera);
@@ -749,6 +989,11 @@ class ShaderMIDIApp {
     handleParameterChange(param, value) {
         this.renderer.updateGlobalParameter(param, value);
         Logger.system(`Parameter ${param} = ${value.toFixed(2)}`);
+
+        // Speed synchronization for audio
+        if (param === 'speed' && this.audioManager) {
+            this.audioManager.setSpeed(value);
+        }
 
         // Automatische Kamera-Aktivierung basierend auf audioToHue
         if (param === 'audioToHue') {

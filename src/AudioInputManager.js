@@ -94,6 +94,7 @@ export class AudioInputManager {
         this.audioElement = new Audio(url);
         this.audioElement.loop = true;
         this.audioElement.crossOrigin = 'anonymous';
+        this.audioElement.playbackRate = 1.0; // Default playback rate
 
         this.audioElement.addEventListener('canplaythrough', () => {
             this.setupAudioAnalyzer();
@@ -237,6 +238,14 @@ export class AudioInputManager {
     resume() {
         if (this.audioContext && this.audioContext.state === 'suspended') {
             this.audioContext.resume();
+        }
+    }
+
+    setSpeed(speed) {
+        if (this.audioElement) {
+            // Clamp speed between 0.25 and 4.0 for audio playback
+            this.audioElement.playbackRate = Math.max(0.25, Math.min(4.0, speed));
+            console.log(`[AUDIO] Playback rate set to ${this.audioElement.playbackRate.toFixed(2)}`);
         }
     }
 }
