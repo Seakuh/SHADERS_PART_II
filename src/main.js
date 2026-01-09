@@ -133,6 +133,12 @@ class MIDIController {
             videoBlur: { type: 'cc', value: 45 },         // CC45 - Blur video toggle
             videoPixelate: { type: 'cc', value: 60 },     // CC60 - Pixelate video toggle
 
+            // -------------- AUDIO DISTORTION EFFECTS --------------
+            distortionHorizontal: { type: 'cc', value: 50 }, // CC50 - Horizontal wave distortion
+            distortionVertical: { type: 'cc', value: 51 },   // CC51 - Vertical wave distortion
+            distortionRadial: { type: 'cc', value: 52 },     // CC52 - Radial/circular distortion
+            screenSplit: { type: 'cc', value: 53 },          // CC53 - Screen split mode (0=off, 1=1/8, 2=1/4, 3=grid)
+
             // -------------- SHADER NAVIGATION --------------
             shaderPrev: { type: 'cc', value: 43 },         // CC43 - Previous shader
             shaderNext: { type: 'cc', value: 44 },         // CC44 - Next shader
@@ -383,6 +389,22 @@ class MIDIController {
             this.onParameterChange('videoEdge', value);
         } else if (cc === this.mappings.videoColorShift.value) {
             this.onParameterChange('videoColorShift', value);
+        } else if (cc === this.mappings.distortionHorizontal.value) {
+            this.onParameterChange('distortionHorizontal', value);
+            this.updateUI('distortion-h-value', value.toFixed(2));
+        } else if (cc === this.mappings.distortionVertical.value) {
+            this.onParameterChange('distortionVertical', value);
+            this.updateUI('distortion-v-value', value.toFixed(2));
+        } else if (cc === this.mappings.distortionRadial.value) {
+            this.onParameterChange('distortionRadial', value);
+            this.updateUI('distortion-r-value', value.toFixed(2));
+        } else if (cc === this.mappings.screenSplit.value) {
+            // Map 0-1 to 0-3 (4 modes)
+            const mode = Math.floor(value * 3.999);
+            this.onParameterChange('screenSplit', mode);
+            const modeNames = ['Off', '1/8 Split', '1/4 Split', 'Grid'];
+            this.updateUI('screen-split-value', modeNames[mode]);
+            Logger.system(`Screen Split Mode: ${modeNames[mode]}`);
         }
     }
 
@@ -429,7 +451,11 @@ class ShaderRenderer {
             u_videoKaleidoscope: 0.0,
             u_videoChromaKey: 0.0,
             u_videoEdge: 0.0,
-            u_videoColorShift: 0.0
+            u_videoColorShift: 0.0,
+            u_distortionHorizontal: 0.0,
+            u_distortionVertical: 0.0,
+            u_distortionRadial: 0.0,
+            u_screenSplit: 0
         };
 
         // Video and audio textures
@@ -485,6 +511,10 @@ class ShaderRenderer {
             uniform float u_videoChromaKey;
             uniform float u_videoEdge;
             uniform float u_videoColorShift;
+            uniform float u_distortionHorizontal;
+            uniform float u_distortionVertical;
+            uniform float u_distortionRadial;
+            uniform int u_screenSplit;
 
             // Video and audio
             uniform sampler2D u_videoTexture;
@@ -548,9 +578,65 @@ class ShaderRenderer {
                 // Calculate audio modulation (bass is most impactful)
                 float audioMod = u_audioBass;
 
+                // Apply audio-reactive distortion effects
+                vec2 center = iResolution.xy * 0.5;
+                vec2 normalizedCoord = (fragCoord - center) / iResolution.xy;
+
+                // Horizontal wave distortion (audio-reactive)
+                if (u_distortionHorizontal > 0.0) {
+                    float wave = sin(normalizedCoord.y * 10.0 + iTime * 2.0) * audioMod * u_distortionHorizontal * 50.0;
+                    fragCoord.x += wave;
+                }
+
+                // Vertical wave distortion (audio-reactive)
+                if (u_distortionVertical > 0.0) {
+                    float wave = sin(normalizedCoord.x * 10.0 + iTime * 2.0) * audioMod * u_distortionVertical * 50.0;
+                    fragCoord.y += wave;
+                }
+
+                // Radial/circular distortion (audio-reactive)
+                if (u_distortionRadial > 0.0) {
+                    float dist = length(normalizedCoord);
+                    float angle = atan(normalizedCoord.y, normalizedCoord.x);
+                    float waveRadial = sin(dist * 20.0 - iTime * 3.0) * audioMod * u_distortionRadial;
+                    fragCoord += vec2(cos(angle), sin(angle)) * waveRadial * 30.0;
+                }
+
+                // Screen split modes
+                if (u_screenSplit == 1) {
+                    // 1/8 split - vertical strips
+                    float stripWidth = iResolution.x / 8.0;
+                    float stripIndex = floor(fragCoord.x / stripWidth);
+                    fragCoord.x = mod(fragCoord.x, stripWidth) + stripIndex * stripWidth;
+                    // Apply offset based on audio
+                    fragCoord.y += audioMod * 20.0 * sin(stripIndex + iTime);
+                } else if (u_screenSplit == 2) {
+                    // 1/4 split - quadrants
+                    vec2 quadrant = floor(fragCoord / (iResolution.xy * 0.5));
+                    fragCoord = mod(fragCoord, iResolution.xy * 0.5);
+                    // Apply rotation per quadrant based on audio
+                    float quadAngle = (quadrant.x + quadrant.y * 2.0) * 1.57079632679 + audioMod * 0.5;
+                    vec2 qCenter = iResolution.xy * 0.25;
+                    fragCoord = fragCoord - qCenter;
+                    float c = cos(quadAngle);
+                    float s = sin(quadAngle);
+                    fragCoord = vec2(
+                        fragCoord.x * c - fragCoord.y * s,
+                        fragCoord.x * s + fragCoord.y * c
+                    ) + qCenter;
+                } else if (u_screenSplit == 3) {
+                    // Grid mode - 4x4
+                    vec2 gridSize = iResolution.xy / 4.0;
+                    vec2 gridIndex = floor(fragCoord / gridSize);
+                    fragCoord = mod(fragCoord, gridSize);
+                    // Apply zoom per cell based on audio
+                    float cellZoom = 1.0 + audioMod * 0.5 * sin(gridIndex.x + gridIndex.y + iTime);
+                    fragCoord = (fragCoord - gridSize * 0.5) * cellZoom + gridSize * 0.5;
+                }
+
                 // Apply zoom with audio modulation
                 float dynamicZoom = u_zoom + (audioMod * u_audioToZoom * 2.0);
-                vec2 center = iResolution.xy * 0.5;
+                center = iResolution.xy * 0.5;
                 fragCoord = (fragCoord - center) / dynamicZoom + center;
 
                 // Apply mirror effect (horizontal flip at center)
@@ -741,7 +827,11 @@ class ShaderRenderer {
                 u_videoKaleidoscope: { value: this.globalUniforms.u_videoKaleidoscope },
                 u_videoChromaKey: { value: this.globalUniforms.u_videoChromaKey },
                 u_videoEdge: { value: this.globalUniforms.u_videoEdge },
-                u_videoColorShift: { value: this.globalUniforms.u_videoColorShift }
+                u_videoColorShift: { value: this.globalUniforms.u_videoColorShift },
+                u_distortionHorizontal: { value: this.globalUniforms.u_distortionHorizontal },
+                u_distortionVertical: { value: this.globalUniforms.u_distortionVertical },
+                u_distortionRadial: { value: this.globalUniforms.u_distortionRadial },
+                u_screenSplit: { value: this.globalUniforms.u_screenSplit }
             }
         });
     }

@@ -13,14 +13,18 @@ export class AudioInputManager {
         this.source = null;
         this.currentSource = 'none';
         this.selector = null;
+        this.deviceSelector = null;
         this.fileInput = null;
         this.canvas = null;
         this.canvasCtx = null;
         this.isAnalyzing = false;
+        this.availableDevices = [];
+        this.currentDeviceId = null;
     }
 
-    init() {
+    async init() {
         this.selector = document.getElementById('audio-selector');
+        this.deviceSelector = document.getElementById('audio-device-selector');
         this.fileInput = document.getElementById('audio-file');
         this.canvas = document.getElementById('audio-canvas');
 
@@ -38,6 +42,16 @@ export class AudioInputManager {
             this.handleSourceChange(e.target.value);
         });
 
+        // Setup device selector change handler
+        if (this.deviceSelector) {
+            this.deviceSelector.addEventListener('change', (e) => {
+                if (this.currentSource === 'microphone') {
+                    this.currentDeviceId = e.target.value;
+                    this.startMicrophone(this.currentDeviceId);
+                }
+            });
+        }
+
         // Setup file input handler
         this.fileInput.addEventListener('change', (e) => {
             const file = e.target.files[0];
@@ -46,7 +60,85 @@ export class AudioInputManager {
             }
         });
 
+        // Enumerate audio input devices
+        await this.updateAudioDevices();
+
+        // Listen for device changes
+        navigator.mediaDevices.addEventListener('devicechange', () => {
+            console.log('[AUDIO] Device change detected');
+            this.updateAudioDevices();
+        });
+
         console.log('[AUDIO] Audio input manager initialized');
+    }
+
+    async updateAudioDevices() {
+        try {
+            // Request permission first
+            try {
+                const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                tempStream.getTracks().forEach(track => track.stop());
+            } catch (e) {
+                console.warn('[AUDIO] Permission request failed:', e.message);
+            }
+
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            this.availableDevices = devices.filter(device => device.kind === 'audioinput');
+
+            console.log(`[AUDIO] Found ${this.availableDevices.length} audio input device(s):`);
+            this.availableDevices.forEach((device, index) => {
+                const label = device.label || `Microphone ${index + 1}`;
+                console.log(`[AUDIO]   [${index}] ${label}`);
+
+                // Detect external soundcards
+                const lowerLabel = label.toLowerCase();
+                if (lowerLabel.includes('volt') || lowerLabel.includes('focusrite') ||
+                    lowerLabel.includes('scarlett') || lowerLabel.includes('motu')) {
+                    console.log(`[AUDIO]       ✓ External audio interface detected!`);
+                }
+            });
+
+            // Update device selector if exists
+            if (this.deviceSelector) {
+                this.updateDeviceSelector();
+            }
+        } catch (error) {
+            console.error('[AUDIO] Error enumerating devices:', error);
+        }
+    }
+
+    updateDeviceSelector() {
+        if (!this.deviceSelector) return;
+
+        this.deviceSelector.innerHTML = '';
+
+        if (this.availableDevices.length > 0) {
+            this.availableDevices.forEach((device, index) => {
+                const option = document.createElement('option');
+                option.value = device.deviceId;
+                const label = device.label || `Microphone ${index + 1}`;
+                const lowerLabel = label.toLowerCase();
+
+                // Highlight external interfaces
+                if (lowerLabel.includes('volt') || lowerLabel.includes('focusrite') ||
+                    lowerLabel.includes('scarlett') || lowerLabel.includes('motu')) {
+                    option.textContent = `🎚️ ${label}`;
+                } else {
+                    option.textContent = label;
+                }
+
+                this.deviceSelector.appendChild(option);
+            });
+
+            if (this.currentDeviceId) {
+                this.deviceSelector.value = this.currentDeviceId;
+            }
+        } else {
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = 'No audio devices found';
+            this.deviceSelector.appendChild(option);
+        }
     }
 
     async handleSourceChange(source) {
@@ -58,21 +150,67 @@ export class AudioInputManager {
 
         switch (source) {
             case 'microphone':
-                await this.startMicrophone();
+                await this.startMicrophone(this.currentDeviceId);
                 break;
             case 'file':
                 this.fileInput.click();
                 break;
+            case 'desktop':
+                await this.startDesktopAudio();
+                break;
             case 'none':
                 this.canvas.style.display = 'none';
                 this.onAudioReady(null);
+                if (this.deviceSelector) {
+                    this.deviceSelector.style.display = 'none';
+                }
                 break;
         }
     }
 
-    async startMicrophone() {
+    async startMicrophone(deviceId = null) {
         try {
-            this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const constraints = {
+                audio: deviceId ? { deviceId: { exact: deviceId } } : true
+            };
+
+            this.stream = await navigator.mediaDevices.getUserMedia(constraints);
+            this.setupAudioAnalyzer();
+            this.source = this.audioContext.createMediaStreamSource(this.stream);
+            this.source.connect(this.analyser);
+
+            this.canvas.style.display = 'block';
+            if (this.deviceSelector) {
+                this.deviceSelector.style.display = 'block';
+            }
+            this.startVisualization();
+            this.onAudioReady(this.getAudioData.bind(this));
+
+            const deviceName = deviceId ?
+                (this.availableDevices.find(d => d.deviceId === deviceId)?.label || 'Unknown') :
+                'Default Microphone';
+            console.log(`[AUDIO] Microphone started successfully: ${deviceName}`);
+        } catch (error) {
+            console.error('[AUDIO] Error accessing microphone:', error);
+            alert('Could not access microphone. Please check permissions.');
+            this.selector.value = 'none';
+        }
+    }
+
+    async startDesktopAudio() {
+        try {
+            // Note: This requires Chrome with --enable-features=WebRTCPipeWireCapturer flag
+            // or getDisplayMedia with audio:true
+            const stream = await navigator.mediaDevices.getDisplayMedia({
+                video: false,
+                audio: {
+                    echoCancellation: false,
+                    noiseSuppression: false,
+                    autoGainControl: false
+                }
+            });
+
+            this.stream = stream;
             this.setupAudioAnalyzer();
             this.source = this.audioContext.createMediaStreamSource(this.stream);
             this.source.connect(this.analyser);
@@ -81,10 +219,10 @@ export class AudioInputManager {
             this.startVisualization();
             this.onAudioReady(this.getAudioData.bind(this));
 
-            console.log('[AUDIO] Microphone started successfully');
+            console.log('[AUDIO] Desktop audio capture started');
         } catch (error) {
-            console.error('[AUDIO] Error accessing microphone:', error);
-            alert('Could not access microphone. Please check permissions.');
+            console.error('[AUDIO] Error accessing desktop audio:', error);
+            alert('Desktop audio capture failed. This feature requires Chrome/Edge with specific flags enabled.');
             this.selector.value = 'none';
         }
     }

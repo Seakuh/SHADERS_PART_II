@@ -125,9 +125,11 @@
             <div class="input-label">Audio Input:</div>
             <select id="audio-selector">
                 <option value="none">None</option>
-                <option value="microphone">Microphone</option>
+                <option value="microphone">Microphone / External</option>
+                <option value="desktop">Desktop Audio</option>
                 <option value="file">Upload File</option>
             </select>
+            <select id="audio-device-selector" style="margin-top: 3px; display:none;"></select>
             <input type="file" id="audio-file" accept="audio/*" style="display:none;">
             <canvas id="audio-canvas"></canvas>
         </div>
@@ -139,16 +141,28 @@
 
         <div class="input-section">
             <div class="info-row">Vibrance: <span id="vib-value">0.00</span></div>
-        <div class="info-row">Hue: <span id="hue-value">0</span></div>
-        <div class="info-row">Saturation: <span id="sat-value">1.0</span></div>
-        <div class="info-row">Grayscale: <span id="gray-value">0.00</span></div>
-        <div class="info-row">Contrast: <span id="contrast-value">1.00</span></div>
-        <div class="info-row">Brightness: <span id="bright-value">1.00</span></div>
-        <div class="info-row">Zoom: <span id="zoom-value">1.00</span></div>
-        <div class="info-row">Speed: <span id="speed-value">1.00</span></div>
-        <div class="info-row">Mirror: <span id="mirror-value">OFF</span></div>
-        <div class="info-row" style="margin-top: 5px; font-size: 10px; opacity: 0.7;">Press 'H' to toggle info</div>
-        <div id="last-midi-event" class="info-row" style="margin-top: 8px; font-size: 10px; color: #0f0; opacity: 0.8;"></div>
+            <div class="info-row">Hue: <span id="hue-value">0</span></div>
+            <div class="info-row">Saturation: <span id="sat-value">1.0</span></div>
+            <div class="info-row">Grayscale: <span id="gray-value">0.00</span></div>
+            <div class="info-row">Contrast: <span id="contrast-value">1.00</span></div>
+            <div class="info-row">Brightness: <span id="bright-value">1.00</span></div>
+            <div class="info-row">Zoom: <span id="zoom-value">1.00</span></div>
+            <div class="info-row">Speed: <span id="speed-value">1.00</span></div>
+            <div class="info-row">Mirror: <span id="mirror-value">OFF</span></div>
+        </div>
+
+        <div class="input-section">
+            <div class="input-label" style="color: #ff00ff;">Audio Distortions:</div>
+            <div class="info-row">Horizontal: <span id="distortion-h-value">0.00</span></div>
+            <div class="info-row">Vertical: <span id="distortion-v-value">0.00</span></div>
+            <div class="info-row">Radial: <span id="distortion-r-value">0.00</span></div>
+            <div class="info-row">Screen Split: <span id="screen-split-value">Off</span></div>
+        </div>
+
+        <div class="input-section">
+            <div class="info-row" style="margin-top: 5px; font-size: 10px; opacity: 0.7;">Press 'H' to toggle info</div>
+            <div id="last-midi-event" class="info-row" style="margin-top: 8px; font-size: 10px; color: #0f0; opacity: 0.8;"></div>
+        </div>
     </div>
     <script type="module" src="/src/main.js"></script>
 </body>
